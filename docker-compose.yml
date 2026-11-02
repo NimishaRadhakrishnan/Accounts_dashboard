@@ -1,0 +1,54 @@
+# Vishakan Bio Tech — Accounts Dashboard
+# Runs separately from VBT Connect (own database, own network, own ports) on the same VPS.
+# Only the web app is published, and only on 127.0.0.1 — put Nginx/Caddy + Cloudflare in front.
+name: vbt-accounts
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vbt_accounts
+      POSTGRES_USER: vbt_accounts
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vbt_accounts -d vbt_accounts"]
+      interval: 10s
+      retries: 5
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+psycopg2://vbt_accounts:${DB_PASSWORD}@db:5432/vbt_accounts
+      UPLOAD_DIR: /data/uploads
+      COOKIE_SECURE: "true"
+    volumes:
+      - uploads:/data/uploads
+    networks: [internal]
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        API_URL: http://api:8100
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks: [internal]
+
+volumes:
+  db_data:
+  uploads:
+
+networks:
+  internal:

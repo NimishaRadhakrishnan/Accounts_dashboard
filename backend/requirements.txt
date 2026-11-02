@@ -1,0 +1,12 @@
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.6
+alembic==1.20.1
+psycopg2-binary==2.9.13
+pydantic[email]==2.13.5
+pydantic-settings==2.16.2
+python-jose[cryptography]==3.5.0
+argon2-cffi==25.1.0
+python-multipart==0.0.32
+openpyxl==3.1.5
+reportlab==5.0.1

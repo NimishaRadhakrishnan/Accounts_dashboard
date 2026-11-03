@@ -289,14 +289,35 @@ def load_sample(db, today: date) -> None:
     print(f"Sample data loaded up to {today}.")
 
 
+def load_tally_demo(db, today: date) -> None:
+    """Users for trying the Tally dashboard. The data itself arrives from the connector."""
+    from app.models import ConnectorKey
+    from app.services.tally_sync import _hash
+    ensure_fy(db, today.year if today.month >= 4 else today.year - 1, make_current=True)
+    roles = {r.code: r for r in db.scalars(select(Role))}
+    for username, name, role in [("admin", "Admin (Sample)", "super_admin"), ("manager", "Lakshmi (Manager, sample)", "management")]:
+        u = db.scalar(select(User).where(User.username == username))
+        if not u:
+            db.add(User(full_name=name, username=username, password_hash=hash_password(DEMO_PASSWORD),
+                        role_id=roles[role].id, must_change_password=False))
+    demo_key = os.environ.get("DEMO_CONNECTOR_KEY", "vbt_demo_key_for_local_testing_only")
+    if not db.scalar(select(ConnectorKey).where(ConnectorKey.key_hash == _hash(demo_key))):
+        db.add(ConnectorKey(label="Demo (local only)", key_hash=_hash(demo_key), hint=demo_key[-6:]))
+    print(f"Demo users ready (password {DEMO_PASSWORD}). Connector key: {demo_key}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sample", action="store_true", help="load SAMPLE data for demos/training")
+    ap.add_argument("--sample", action="store_true", help="(old manual-entry mode) load SAMPLE entries")
+    ap.add_argument("--tally-demo", action="store_true",
+                    help="demo users (admin, manager) + a connector key, for use with tally_simulator.py")
     ap.add_argument("--today", type=date.fromisoformat, default=date.today())
     args = ap.parse_args()
     with SessionLocal() as db:
         ensure_reference_data(db)
-        if args.sample:
+        if args.tally_demo:
+            load_tally_demo(db, args.today)
+        elif args.sample:
             load_sample(db, args.today)
         else:
             ensure_fy(db, args.today.year if args.today.month >= 4 else args.today.year - 1, make_current=True)

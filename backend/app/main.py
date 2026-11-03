@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.errors import DomainError
-from app.routers import admin, attachments, auth, money, purchases, reports, sales
+from app.routers import admin, attachments, auth, money, purchases, reports, sales, tally
 
 # Money goes over the wire as exact strings ("1234.50"), never floats.
 ENCODERS_BY_TYPE[Decimal] = str
@@ -57,7 +57,9 @@ async def validation_error(_: Request, exc: RequestValidationError):
                         status_code=422)
 
 
-for r in (auth, admin, sales, purchases, money, reports, attachments):
+# The manager dashboard reads from Tally. The older manual-entry screens' API stays available only when
+# ENABLE_MANUAL_ENTRY=true (off by default), so nothing can be entered in two places.
+for r in (auth, admin, tally) + ((sales, purchases, money, reports, attachments) if settings.enable_manual_entry else ()):
     app.include_router(r.router)
 
 

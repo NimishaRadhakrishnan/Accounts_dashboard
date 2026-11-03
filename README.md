@@ -1,160 +1,91 @@
-# Vishakan Bio Tech — Accounts Department Dashboard (v1)
+# Vishakan Bio Tech — Business Overview (reads from Tally)
 
-A simple, professional accounts app for the Vishakan Bio Tech accounts team: GST invoices to dealers, supplier
-bills, receipts and payments, expenses, outstanding/ageing, reports (Excel/PDF), Tally export, and user/role
-management with a permanent audit log.
+A simple screen for the manager that shows how the business is doing: sales, money collected, expenses,
+profit (estimate), cash & bank, and what dealers owe. It works on a phone or a computer. It **updates itself from
+Tally** every 10 minutes. Nobody types anything twice, and nothing here ever changes Tally.
 
-**Agreed scope for v1** (from the approved roadmap): separate app on the same VPS as VBT Connect; **Tally stays the
-statutory books** — this app is for daily entry, tracking and reporting, and exports vouchers to Tally.
+```
+ Office computer (Tally open)                    VPS (same server as VBT Connect)
+ ┌────────────────────────────┐   HTTPS, every   ┌───────────────────────────────────┐
+ │ Tally  ◄── read-only XML ──┤   10 minutes     │ API (FastAPI) ─ PostgreSQL copy   │
+ │ (port 9000, localhost)     │ ───────────────► │       │                           │
+ │ Tally Connector (Python)   │  only changes;   │ Web (Next.js) ◄── Manager: phone / │
+ └────────────────────────────┘  full re-read    │                   computer         │
+                                  once a day     └───────────────────────────────────┘
+```
 
----
+## What the manager sees (one page)
+* **"In short"**: 4–6 plain sentences about what went up or down. Examples: "Sales were ₹26.80 lakh — down 6% on
+  September, up 10% on last October", "Repairs & Maintenance was 3.2 times the usual", "Vaigai Fertilisers bought
+  less — worth a call", "₹4.7 lakh is more than 3 months late".
+* **Six boxes**, each with a green/red arrow and a 12-month trend line: Sales · Money collected · Expenses ·
+  Profit (estimate) · Cash and bank · Dealers owe us. Tap any box for the details behind it.
+* **Sales month by month**: this year against last year.
+* **Who owes us the most** (and how late), **best dealers**, **where the money went**, **best-selling products**.
+* Three period buttons: *This month so far* · *last month* · *This year*. In the first week of a month it opens on
+  last month, because a few days are too little to judge.
+* "Updated from Tally 8 minutes ago". If the Tally computer stops sending, this turns amber and explains why.
+* Large text, plain words, an A / A+ / A++ text-size switch, and no menus to learn.
 
-## 1. What is in the box
-
-| Module | What it does |
+## How figures are worked out (from Tally's own groups)
+| Figure | From |
 |---|---|
-| Dashboard | Sales / expenses this month (vs last month), receivables, payables, cash & bank; sales-vs-spending chart for the FY; receivables ageing; top overdue dealers; supplier bills due in 7 days; approvals waiting; recent entries |
-| Sales & Invoices | Draft → post GST tax invoices (number given at posting, gap-free per FY, ≤16 chars). CGST+SGST or IGST chosen automatically from the dealer's state. Credit notes (returns). Cancel with reason (number never reused). Edit posted invoice (Accounts Manager only, before period lock). Invoice PDF with amount in words. Credit-limit warning |
-| Purchase Bills | Enter supplier bills with attachments; **maker-checker** — a different person verifies before the bill hits the books. Duplicate supplier bill no. blocked. Debit notes |
-| Payments & Receipts | Receipts from dealers and payments to suppliers, auto-adjusted oldest-first (or by hand), part payments and advances. Payments above a limit need approval. Cash ↔ bank transfers. Cash can never go negative |
-| Expenses | Category-wise expenses from cash/bank, optional GST input credit, receipt photo upload, approval above a limit |
-| Outstanding | Receivables / payables ageing (not due, 1–30, 31–60, 61–90, 90+), advances, credit-limit flags, party statement (PDF/Excel) |
-| Reports | Sales register, purchase register, GST summary, HSN summary, expense report, expenses by category, receivables/payables ageing, party ledger, cash/bank book, P&L summary, trial balance — each to **Excel and PDF**. **Tally XML** voucher export |
-| Settings | Company profile & logo, dealers/suppliers, products (HSN, GST), bank & cash accounts, expense categories, payment terms, opening balances, numbering, approval limits, month locking, users & roles (editable permission matrix), audit log, Tally ledger names |
+| Sales | net credits to ledgers under **Sales Accounts** (before GST, after returns) |
+| Money collected | dealer (Sundry Debtors) credits in entries that put money into Cash/Bank |
+| Expenses | ledgers under **Direct + Indirect Expenses**. Purchases are shown separately. |
+| Profit (estimate) | sales + other income − purchases − expenses ± change in stock value (if stock is kept in Tally) |
+| Cash and bank | balances under **Cash-in-Hand** and **Bank Accounts / Bank OD** |
+| Dealers owe us | balances under **Sundry Debtors**. Lateness is worked out by matching payments to the oldest bills first, using each dealer's credit period (default 30 days). |
 
-### Made for people new to computers (no training or tour needed)
-* **Home screen asks "What would you like to do?"** with large buttons: make an invoice, money received, pay a supplier,
-  enter a supplier bill, add an expense, who owes us, get a report.
-* **Plain words everywhere**: "Dealers owe us" instead of receivables, "Goods returned" instead of credit note,
-  "Waiting to be checked" instead of unverified, "Late by 12 days" instead of overdue 12d. Every menu item has a
-  one-line description under it.
-* **Big and clear**: nothing smaller than 14 px, 44 px buttons and boxes, strong contrast, no ALL-CAPS headings.
-  A **Text size A / A+ / A++** switch at the top enlarges the whole screen and is remembered on that computer.
-* **Forms guide you**: invoices are 3 numbered steps; the Save button always works and, if something is missing,
-  says exactly what ("Choose the dealer", "Type the quantity on line 2") and marks the box in red.
-* **Payments fill themselves in**: money received is linked to the oldest unpaid invoices automatically; the account is
-  picked automatically when there is only one; "How was it paid?" is four big buttons.
-* **Nothing hidden**: every row has a visible "Open" button, "See details →" is always shown, windows only close with
-  their Close button (a stray click outside never loses typed work), and messages appear large at the top of the
-  screen for 7–12 seconds with a close button.
-* **Safe**: every delete, cancel, approve or sign-out asks "Are you sure?" in plain words; "Cancel this invoice" is
-  never confused with closing a window. Password box has Show/Hide and a Caps Lock warning.
+Custom groups (for example "Dealers - Kerala" under Sundry Debtors) are followed up to Tally's main groups
+automatically. The admin can change the mapping in **Settings → Tally link → Check group mapping**.
+Cancelled, optional and post-dated vouchers are ignored. Balances come from **Tally's own closing balances**, so
+they match Tally exactly. The admin page has a "Do the figures match Tally?" table.
 
-### How the numbers stay right
-* **Double-entry ledger underneath.** Every posted document creates one balanced journal entry; cancel/edit adds a
-  reversing entry. Dashboard, outstanding and reports all read the same ledger, so they always agree.
-* The database itself refuses unbalanced entries and refuses any UPDATE/DELETE on the journal or audit log (triggers).
-* Money is `NUMERIC(14,2)` end to end and travels over the API as exact strings — never floats.
-* GST maths (one place: `backend/app/services/gst.py`): taxable = qty × rate − discount; CGST = SGST = taxable × rate/2
-  (each rounded to paise) or IGST = taxable × rate; invoice total rounded to the rupee with a visible round-off line.
+## The Tally connector (`tally-connector/`)
+* `vbt_tally_connector.py`: one Python file with no extra packages. It only sends *Export* requests to Tally.
+* Every 10 minutes it checks Tally's change counters (AltVchID/AltMstID). If nothing changed it sends only a
+  heartbeat. If entries changed it sends just the changed ones. Once a day it re-reads the current and previous
+  financial year month by month, which also clears out entries deleted in Tally.
+* It handles both "invoice" and "voucher" style entries, Tally's UTF-16 output, and the odd control characters
+  Tally emits.
+* Windows helpers: `1-test-connection.bat`, `2-install-auto-update.bat` (Task Scheduler), `3-stop-auto-update.bat`.
+  Plain-language steps are in `SETUP-GUIDE.txt`. The admin downloads all of this from **Settings → Tally link**,
+  with the website address already filled in.
+* `--file DayBook.xml Masters.xml` sends Tally XML exports instead of a live connection. This is useful for a
+  first trial with real data.
+* `tally_simulator.py`: a pretend Tally used for tests and demos. It is not used in production.
 
-### Security
-Argon2 password hashing (passwords can only be reset, never viewed) · httpOnly SameSite=Strict cookies + CSRF header ·
-30-minute idle sign-out · lockout after 5 wrong passwords · forced password change on first sign-in · role-based
-permissions checked on every API call · append-only audit log of every create/edit/post/cancel/approve/export/sign-in ·
-attachments stored outside the web root with type checks · locked months · production refuses to start with a weak
-secret. Full bank account numbers are never stored (last 4 digits only).
-
----
-
-## 2. Run it locally
-
-Needs Python 3.12+, Node 22, PostgreSQL 16.
-
+## Run locally (demo with the pretend Tally)
 ```bash
-# database
-createuser -P vbt          # password: vbt_dev  (or set DATABASE_URL)
-createdb -O vbt vbt_accounts
-
-# backend
-cd backend
-pip install -r requirements-dev.txt
-alembic upgrade head
-python seed.py --sample            # SAMPLE data: ~7 months of entries for training/demo
-uvicorn app.main:app --port 8100   # API docs at http://localhost:8100/api/docs
-
-# frontend (new terminal)
-cd frontend
-npm install
-npm run build && npx next start -p 3100     # or: npm run dev -- -p 3100
+cd backend && pip install -r requirements-dev.txt && ./reset_dev_db.sh      # users: admin / manager, password Vbt@Demo2026
+uvicorn app.main:app --port 8100 &
+cd ../tally-connector && python tally_simulator.py --port 9000 &
+#   connector.ini: dashboard url = http://127.0.0.1:8100, token = vbt_demo_key_for_local_testing_only
+python vbt_tally_connector.py --test && python vbt_tally_connector.py
+cd ../frontend && npm install && npm run build && npx next start -p 3100     # open http://localhost:3100
 ```
-Open http://localhost:3100.
+Tests: `cd backend && pytest -q` (74 tests). They include the whole chain: pretend Tally → real connector →
+API → figures, checked against the source to the rupee.
 
-**Sample logins** (password `Vbt@Demo2026` for all): `admin` (Super Admin), `manager` (Accounts Manager),
-`accountant`, `ceo` (Management view + approvals), `auditor` (read-only + audit log).
-
-`backend/reset_dev_db.sh` wipes and reloads sample data (refuses to run in production).
-
-### Tests
+## Deploy (Hostinger VPS, next to VBT Connect)
 ```bash
-cd backend && createdb -O vbt vbt_accounts_test && pytest -q     # 60 tests
-```
-Covers GST/rounding/amount-in-words, numbering, posting & reversal, credit/debit notes, allocation & advances,
-maker-checker, approval limits, cash limits, period locks, opening balances, DB triggers, report reconciliation
-(trial balance, GST net, P&L, dashboard), Tally export, auth/CSRF/lockout/permissions, and every Excel/PDF export.
-
----
-
-## 3. Deploy on the Hostinger VPS (next to VBT Connect)
-
-The app has its own database, network and port, and publishes only `127.0.0.1:3100`.
-
-```bash
-sudo mkdir -p /opt/vbt-accounts && cd /opt/vbt-accounts     # copy this folder here
-cp .env.example .env && nano .env                            # set DB_PASSWORD, JWT_SECRET, BACKUP_PASSPHRASE
+cp .env.example .env    # set DB_PASSWORD, JWT_SECRET, BACKUP_PASSPHRASE
 docker compose up -d --build
-docker compose exec -e ADMIN_PASSWORD='choose-a-strong-one' api python seed.py   # reference data + first admin
+docker compose exec -e ADMIN_PASSWORD='…' api python seed.py   # first admin (must change password)
 ```
-Then:
-1. Nginx: copy `deploy/nginx-accounts.conf`, set the sub-domain (e.g. `accounts.<company-domain>`), Cloudflare
-   origin certificate, `nginx -t && systemctl reload nginx`. Cloudflare DNS → proxied, SSL "Full (strict)".
-2. Backups: `crontab -e` → `15 1 * * * /opt/vbt-accounts/deploy/backup.sh >> /var/log/vbt-accounts-backup.log 2>&1`
-   (encrypted DB + attachments, 30-day retention, optional rclone copy off-server).
-3. Test a restore: `deploy/restore.sh /var/backups/vbt-accounts/db-<stamp>.sql.gz.gpg` (restores into a test DB).
-4. UFW: only 22/80/443 open; nothing from this app needs another port.
+Nginx + Cloudflare: `deploy/nginx-accounts.conf`. Backups: `deploy/backup.sh` (nightly, encrypted) and
+`deploy/restore.sh` (test restores). Then:
+1. Sign in as admin → **Settings → Users** → add the manager with role **Management (View)**.
+2. **Settings → Tally link** → *Download connector* → *Create connector key* → follow the 6 steps on the Tally PC.
 
----
+## Still to confirm with Vishakan's real Tally
+* Version (TallyPrime or ERP 9) and that port 9000 can be turned on.
+* Real group names. The mapping is automatic, but a quick look in "Check group mapping" after the first sync is wise.
+* Whether stock is maintained in Tally (this affects the profit estimate) and whether bills are tracked bill-by-bill.
+* Send a **Day Book (one month) + List of Accounts** export, and the admin page's match table will confirm the
+  figures before the manager sees them.
 
-## 4. Go-live checklist (needs the company's inputs)
-
-Everything company-specific is **SAMPLE** until confirmed. The app runs fully without it, but these must be
-replaced before real invoices go out:
-
-| # | Item | Where it goes |
-|---|---|---|
-| C1–C3 | Legal name, address, GSTIN, PAN, logo, signatory, bank details on invoice, invoice terms | Settings → Company |
-| C4–C5 | Sample invoice to match layout; current numbering format and last number used in Tally | Settings → Numbering (prefix + next number) |
-| C6–C8 | Dealer list, supplier list, product list with **HSN and GST rates confirmed by the CA** | Settings → Dealers & suppliers / Products |
-| C10–C11 | Opening bank/cash balances and every unpaid invoice/bill on the go-live date | Settings → Bank & cash; Dealers & suppliers → Opening balance |
-| C12–C13 | Credit days per dealer, credit limits, expense categories, approval limits | Settings |
-| C15 | Staff list and who approves what | Settings → Users & roles |
-| C16 | Tally ledger names (exact spelling) — then **test the XML import on a copy of the Tally company** | Settings → Tally ledgers |
-| C17–C18 | Turnover (decides e-invoicing), TDS/TCS applicability | Not built in v1 — see limitations |
-| C20, C22 | Sub-domain, backup location | Deploy steps above |
-
-Production starts empty (no `--sample`). Recommended: run alongside Tally for the first month and check that the
-trial balance, receivables and GST summary match before relying on it.
-
----
-
-## 5. Known limitations of v1 (deliberate, per agreed scope)
-* **Not the statutory books**: no GSTR-1/3B filing, e-invoice (IRN/QR) or e-way bill generation, TDS/TCS, depreciation,
-  stock valuation or year-end closing. P&L is a management summary only. These stay in Tally / with the CA.
-* No inventory/stock tracking; no payroll (salary totals can be booked as an expense).
-* No bank statement import / reconciliation screen yet.
-* Tally XML follows Tally's standard voucher import format but has **not been tested against Vishakan's Tally** —
-  needs one trial import (C16).
-* No email/WhatsApp sending of invoices or reminders.
-* Sample GST rates/HSN codes are placeholders, not tax advice.
-
-## 6. Layout
-```
-backend/   FastAPI + SQLAlchemy 2 + Alembic (Clean layering: models → services → routers)
-  app/services/gst.py      GST maths          app/services/ledger.py   double-entry posting
-  app/services/sales.py    invoices, CNs      app/services/purchases.py bills, DNs (maker-checker)
-  app/services/cash.py     receipts, payments, allocation, expenses, transfers
-  app/services/reports.py  all reports        app/services/exports.py  Excel/PDF/invoice PDF
-  app/services/tally.py    Tally XML          migrations/              schema + DB safety triggers
-frontend/  Next.js 16 + Tailwind 4 + Recharts (palette tokens in app/globals.css)
-deploy/    backup.sh, restore.sh, nginx-accounts.conf
-```
+## Older manual-entry module
+The earlier screens for typing invoices, bills and payments are switched off, since Tally is where entries are made.
+The code is kept (`ENABLE_MANUAL_ENTRY=true` turns its API back on) but it is not shown to anyone.

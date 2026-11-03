@@ -1,289 +1,271 @@
 "use client";
 
-import {
-  AlertCircle, ArrowDownLeft, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, CheckCircle2, Clock3, FilePlus2,
-  Landmark, ReceiptText, ShoppingCart, Wallet,
-} from "lucide-react";
-import Link from "next/link";
+import { AlertTriangle, ChevronRight, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { useApi } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth";
-import { d, inr, inrShort, num, pct, rupees } from "@/lib/format";
-import { Card, cx, ErrorBox, Spinner } from "@/components/ui";
+import { ago, money, num, type Money } from "@/lib/format";
+import { useApi } from "@/lib/hooks";
+import { BarRow, Change, DetailSheet, GREEN, LAST_YEAR, Spark, StoryLine } from "@/components/overview-parts";
+import { Card, cx, Empty, ErrorBox, Spinner } from "@/components/ui";
 
-// Validated (dataviz validator, light surface): Sales #1d7f5f bars + Costs #eb6834 line.
-// Protan ΔE 7.0 sits in the floor band, so the series also differ by mark type (bar vs line) and have a legend.
-const SALES = "#1d7f5f";
-const COSTS = "#eb6834";
-
-type Dash = {
-  as_of: string; fy: string;
-  kpis: Record<string, string>;
-  banks: { id: number; name: string; kind: string; balance: string }[];
-  trend: { month: string; sales: string; purchases: string; expenses: string; future: boolean }[];
-  receivable_ageing: { key: string; label: string; amount: string }[];
-  payable_ageing: { key: string; label: string; amount: string }[];
-  overdue_dealers: { party_id: number; party_name: string; net: string; oldest_overdue_days: number; open_count: number }[];
-  upcoming_payments: { id: number; number: string; party_name: string; due_date: string; balance: string; supplier_bill_no: string }[];
-  recent: { date: string; type: string; source_id: number; narration: string; amount: string; is_reversal: boolean }[];
-  pending: { payments: number; expenses: number; bills_to_verify: number };
+type Tile = { value: Money; compare: Money; last_year: Money | null; change_pct: number | null; good_when_up: boolean; spark: Money[];
+  purchases?: Money; payables?: Money; late?: Money; stock_included?: boolean };
+type Overview = {
+  period: { key: string; title: string; label: string; compare_label: string; last_year_label: string; days: number; to: string };
+  freshness: { minutes_ago: number | null; stale: boolean; error: string | null; company: string };
+  story: { tone: string; kind: string; text: string }[];
+  tiles: Record<"sales" | "collections" | "expenses" | "profit" | "cash" | "receivables", Tile>;
+  sales_chart: { this_year_label: string; last_year_label: string; months: { month: string; this_year: Money | null; last_year: Money | null }[] };
+  owe_us: { party: string; owed: Money; late: Money; oldest_late_days: number }[];
+  top_dealers: { party: string; amount: Money; change_pct: number | null }[];
+  spending: { name: string; amount: Money; change_pct: number | null }[];
+  spending_other: Money;
+  products: { item: string; amount: Money; qty: Money; unit: string }[];
+  month_labels: string[];
 };
 
-// ---------- "What would you like to do?" ----------
-const ACTIONS = [
-  { href: "/sales/new", perm: "sales.create", icon: FilePlus2, title: "Make a new invoice", text: "Bill a dealer for goods sold" },
-  { href: "/payments?new=receipt", perm: "receipts.create", icon: ArrowDownLeft, title: "Money received", text: "A dealer paid us" },
-  { href: "/payments?new=payment", perm: "payments.create", icon: ArrowUpRight, title: "Pay a supplier", text: "We paid a supplier" },
-  { href: "/purchases/new", perm: "purchases.create", icon: ShoppingCart, title: "Enter a supplier bill", text: "A bill we received" },
-  { href: "/expenses?new=1", perm: "expenses.create", icon: Wallet, title: "Add an expense", text: "Fuel, rent, travel, office" },
-  { href: "/outstanding", perm: "outstanding.view", icon: Clock3, title: "Who owes us?", text: "Pending payments from dealers" },
-  { href: "/reports", perm: "reports.view", icon: BarChart3, title: "Get a report", text: "Download Excel or PDF" },
+type PeriodKey = "month" | "last_month" | "year";
+
+function defaultPeriod(): PeriodKey {
+  // In the first week of a month there is too little to judge, so start on last month.
+  return new Date().getDate() <= 7 ? "last_month" : "month";
+}
+
+function Freshness({ f, onRefresh, loading }: { f: Overview["freshness"]; onRefresh: () => void; loading: boolean }) {
+  const bad = f.stale || !!f.error;
+  return (
+    <div className={cx("flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-2 text-base", bad ? "bg-warn-bg text-warn" : "bg-ok-bg text-ok")} role="status">
+      <span className={cx("h-2.5 w-2.5 rounded-full", bad ? "bg-warn" : "bg-ok")} />
+      <span>{bad ? <AlertTriangle className="mr-1 inline h-4 w-4" /> : null}
+        Updated from Tally {ago(f.minutes_ago)}
+        {f.stale && " — the Tally computer may be switched off. Figures may be old."}
+        {!f.stale && f.error && ` — last try had a problem: ${f.error}`}
+      </span>
+      <button onClick={onRefresh} className="inline-flex items-center gap-1 underline underline-offset-4" aria-label="Check for new figures">
+        <RefreshCw className={cx("h-4 w-4", loading && "animate-spin")} /> Refresh
+      </button>
+    </div>
+  );
+}
+
+const TILE_INFO: { key: keyof Overview["tiles"]; label: string; hint: string }[] = [
+  { key: "sales", label: "Sales", hint: "billed to dealers, before GST" },
+  { key: "collections", label: "Money collected", hint: "received from dealers" },
+  { key: "expenses", label: "Expenses", hint: "salaries, rent, fuel and more" },
+  { key: "profit", label: "Profit (estimate)", hint: "sales minus costs" },
+  { key: "cash", label: "Cash and bank", hint: "money we have now" },
+  { key: "receivables", label: "Dealers owe us", hint: "still to be paid" },
 ];
 
-function ActionTile({ href, icon: Icon, title, text }: { href: string; icon: typeof Wallet; title: string; text: string }) {
+function KpiTile({ info, t, vs, months, onOpen }: { info: (typeof TILE_INFO)[number]; t: Tile; vs: string; months: string[]; onOpen: () => void }) {
+  const balanceTile = info.key === "cash" || info.key === "receivables";
+  let foot: React.ReactNode = null;
+  if (info.key === "cash" && t.payables !== undefined) foot = <>We owe suppliers <b className="text-ink">{money(t.payables)}</b></>;
+  if (info.key === "receivables" && t.late !== undefined)
+    foot = num(t.late) > 0 ? <span className="font-medium text-bad">{money(t.late)} of this is late</span> : <span className="text-ok">Nothing is late</span>;
+  if (info.key === "expenses" && t.purchases !== undefined) foot = <>Materials bought: <b className="text-ink">{money(t.purchases)}</b></>;
+  if (info.key === "profit") foot = <>An estimate{t.stock_included ? ", includes stock change" : ""}</>;
   return (
-    <Link href={href} className="group flex items-center gap-4 rounded-xl border-2 border-line bg-white p-4 shadow-card transition-colors hover:border-accent hover:bg-soft-2/40">
-      <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-soft text-sidebar group-hover:bg-sidebar group-hover:text-white">
-        <Icon className="h-7 w-7" strokeWidth={1.8} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-lg font-semibold text-ink">{title}</span>
-        <span className="block text-base text-muted">{text}</span>
-      </span>
-      <ArrowRight className="h-6 w-6 shrink-0 text-accent-strong" />
-    </Link>
+    <button onClick={onOpen} className="group flex flex-col rounded-xl border-2 border-line bg-white p-3.5 text-left shadow-card transition-colors hover:border-accent sm:p-5">
+      <div className="text-base font-semibold leading-tight text-ink">{info.label}</div>
+      <div className="hidden text-sm text-muted sm:block">{info.hint}</div>
+      <div className={cx("num mt-2 text-xl font-bold leading-tight sm:text-3xl", info.key === "profit" && num(t.value) < 0 && "text-bad")}>{money(t.value)}</div>
+      <div className="mt-1 min-h-6"><Change pct={t.change_pct} goodWhenUp={t.good_when_up} vs={balanceTile ? "at the start" : vs} size="sm" /></div>
+      <div className="mt-2 flex items-end justify-between gap-2">
+        <Spark values={t.spark} labels={months} />
+        <span className="hidden text-xs text-muted sm:inline">12 months</span>
+      </div>
+      {foot && <div className="mt-2 hidden border-t border-line pt-2 text-sm text-muted sm:block">{foot}</div>}
+      <div className="mt-auto flex items-center gap-1 pt-2 text-sm font-medium text-accent-strong">Details <ChevronRight className="h-4 w-4" /></div>
+    </button>
   );
 }
 
-// ---------- Money at a glance ----------
-function Compare({ now, prev, goodWhenUp = true }: { now: string; prev: string; goodWhenUp?: boolean }) {
-  const p = pct(now, prev);
-  if (p === null) return null;
-  const up = p >= 0;
-  const good = up === goodWhenUp;
+function useNarrow() {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const f = () => setNarrow(window.innerWidth < 640);
+    f();
+    window.addEventListener("resize", f);
+    return () => window.removeEventListener("resize", f);
+  }, []);
+  return narrow;
+}
+
+const axisMoney = (v: number) => (v >= 1e7 ? `₹${(v / 1e7).toFixed(1)}Cr` : v >= 1e5 ? `₹${Math.round(v / 1e5)}L` : `₹${Math.round(v / 1e3)}K`);
+
+function SalesChart({ c, partialMonth }: { c: Overview["sales_chart"]; partialMonth: string | null }) {
+  const narrow = useNarrow();
+  const data = c.months.map((m) => ({ month: m.month, thisYear: m.this_year === null ? null : num(m.this_year), lastYear: m.last_year === null ? null : num(m.last_year) }));
   return (
-    <span className={cx("inline-flex items-center gap-1 text-base font-medium", good ? "text-ok" : "text-bad")}>
-      {up ? <ArrowUpRight className="h-5 w-5" /> : <ArrowDownRight className="h-5 w-5" />}
-      {Math.abs(p).toFixed(0)}% {up ? "more" : "less"} than last month
-    </span>
+    <>
+      <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-base">
+        <span className="flex items-center gap-2"><span className="h-3.5 w-3.5 rounded-sm" style={{ background: GREEN }} />This year ({c.this_year_label})</span>
+        <span className="flex items-center gap-2"><span className="h-1 w-5 rounded" style={{ background: LAST_YEAR }} />Last year ({c.last_year_label})</span>
+      </div>
+      <div className="h-64 sm:h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid vertical={false} stroke="#e3e9e5" />
+            <XAxis dataKey="month" tickLine={false} axisLine={{ stroke: "#dce4df" }} tick={{ fontSize: 14, fill: "#4f5d56" }} interval={narrow ? 1 : 0} />
+            <YAxis tickLine={false} axisLine={false} width={narrow ? 46 : 56} tick={{ fontSize: 13, fill: "#4f5d56" }} tickFormatter={axisMoney} />
+            <Tooltip cursor={{ fill: "rgba(220,228,223,0.45)" }} content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const ty = payload.find((p) => p.dataKey === "thisYear")?.value as number | undefined;
+              const ly = payload.find((p) => p.dataKey === "lastYear")?.value as number | undefined;
+              return (
+                <div className="rounded-lg border border-line bg-white px-4 py-3 text-base shadow-lg">
+                  <div className="mb-1 font-semibold">{label}{label === partialMonth ? " (so far)" : ""}</div>
+                  {ty !== undefined && ty !== null && <div>This year: <b className="num">{money(ty)}</b></div>}
+                  {ly !== undefined && ly !== null && <div className="text-muted">Last year: <span className="num">{money(ly)}</span></div>}
+                </div>
+              );
+            }} />
+            <Bar dataKey="thisYear" fill={GREEN} maxBarSize={28} radius={[4, 4, 0, 0]} />
+            <Line dataKey="lastYear" stroke={LAST_YEAR} strokeWidth={2} dot={{ r: 4, strokeWidth: 2, stroke: "#fff", fill: LAST_YEAR }} connectNulls={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      {partialMonth && <p className="mt-2 text-sm text-muted">{partialMonth} is not over yet, so its bar is only part of the month.</p>}
+    </>
   );
 }
 
-function Kpi({ label, value, sub, href, foot, tone }: { label: string; value: string; sub?: React.ReactNode; href: string; foot?: React.ReactNode; tone?: "bad" }) {
-  return (
-    <Link href={href} className="flex flex-col rounded-xl border-2 border-line bg-white p-5 shadow-card transition-colors hover:border-accent">
-      <div className="text-base font-medium text-muted">{label}</div>
-      <div className={cx("num mt-1.5 text-3xl font-semibold", tone === "bad" ? "text-bad" : "text-ink")}>{rupees(value)}</div>
-      <div className="mt-1 min-h-6 text-base text-muted">{sub}</div>
-      {foot && <div className="mt-3 border-t border-line pt-3 text-base text-muted">{foot}</div>}
-      <div className="mt-auto pt-3 text-base font-medium text-accent-strong">See details →</div>
-    </Link>
-  );
-}
+export default function OverviewPage() {
+  const { me } = useAuth();
+  const [period, setPeriod] = useState<PeriodKey>("month");
+  const [ready, setReady] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    let p: PeriodKey = defaultPeriod();
+    try { p = (sessionStorage.getItem("vbt-period") as PeriodKey) || p; } catch { /* ignore */ }
+    setPeriod(p);
+    setReady(true);
+  }, []);
+  const choose = (p: PeriodKey) => { setPeriod(p); try { sessionStorage.setItem("vbt-period", p); } catch { /* ignore */ } };
+  const { data, error, loading, reload } = useApi<Overview>(ready ? `/api/overview?period=${period}` : null);
 
-const TYPE_LABEL: Record<string, string> = {
-  sales_invoice: "Invoice", credit_note: "Sales return", purchase_bill: "Supplier bill", debit_note: "Purchase return",
-  receipt: "Money received", payment: "Money paid", expense: "Expense", contra: "Cash ↔ Bank",
-};
-const TYPE_HREF: Record<string, (id: number) => string> = {
-  sales_invoice: (id) => `/sales/${id}`, purchase_bill: (id) => `/purchases/${id}`,
-  receipt: () => "/payments", payment: () => "/payments?tab=payments", expense: () => "/expenses",
-  contra: () => "/payments?tab=transfers", credit_note: () => "/sales?tab=credit", debit_note: () => "/purchases?tab=debit",
-};
+  // keep the screen up to date by itself
+  useEffect(() => {
+    const t = setInterval(() => reload(), 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [reload]);
 
-function AgeingBars({ rows }: { rows: { key: string; label: string; amount: string }[] }) {
-  const max = Math.max(1, ...rows.map((r) => num(r.amount)));
-  const plain: Record<string, string> = { not_due: "Not due yet", d0_30: "Late up to 1 month", d31_60: "Late 1–2 months", d61_90: "Late 2–3 months", d90_plus: "Late over 3 months" };
-  return (
-    <div className="space-y-4">
-      {rows.map((r) => (
-        <div key={r.key}>
-          <div className="flex justify-between text-base">
-            <span className={cx(r.key === "d90_plus" ? "font-semibold text-bad" : "text-ink")}>{plain[r.key] ?? r.label}</span>
-            <span className="num font-semibold">{rupees(r.amount)}</span>
-          </div>
-          <div className="mt-1.5 h-3 rounded-full bg-soft-2">
-            <div className="h-3 rounded-full" style={{ width: `${Math.max(num(r.amount) ? 2 : 0, (num(r.amount) / max) * 100)}%`, background: r.key === "not_due" ? "#a9b7ae" : SALES, opacity: r.key === "not_due" ? 1 : 0.55 + ["d0_30", "d31_60", "d61_90", "d90_plus"].indexOf(r.key) * 0.15 }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: { dataKey: string; value: number }[]; label?: string }) {
-  if (!active || !payload?.length) return null;
-  const s = payload.find((p) => p.dataKey === "sales")?.value ?? 0;
-  const c = payload.find((p) => p.dataKey === "costs")?.value ?? 0;
-  return (
-    <div className="rounded-lg border border-line bg-white px-4 py-3 text-base shadow-lg">
-      <div className="mb-1 font-semibold text-ink">{label}</div>
-      <div className="flex items-center gap-2"><span className="h-3 w-3 rounded-sm" style={{ background: SALES }} />Sales <span className="num ml-auto pl-6 font-medium">{rupees(s)}</span></div>
-      <div className="flex items-center gap-2"><span className="h-1 w-3" style={{ background: COSTS }} />Spending <span className="num ml-auto pl-6 font-medium">{rupees(c)}</span></div>
-    </div>
-  );
-}
-
-export default function HomePage() {
-  const { me, can } = useAuth();
-  const { data, error, loading, reload } = useApi<Dash>("/api/dashboard");
+  const lastMonthName = useMemo(() => {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+    return d.toLocaleDateString("en-IN", { month: "long" });
+  }, []);
   const hour = new Date().getHours();
   const hello = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const actions = ACTIONS.filter((a) => can(a.perm));
+  const partial = data && data.period.key !== "last_month" ? new Date(data.period.to).toLocaleDateString("en-IN", { month: "short" }) : null;
 
-  const approvals = data ? [
-    can("purchases.verify") && data.pending.bills_to_verify > 0 && { n: data.pending.bills_to_verify, label: `supplier bill${data.pending.bills_to_verify > 1 ? "s" : ""} waiting for you to check`, href: "/purchases?status=draft" },
-    can("payments.approve") && data.pending.payments > 0 && { n: data.pending.payments, label: `payment${data.pending.payments > 1 ? "s" : ""} waiting for your approval`, href: "/payments?tab=payments" },
-    can("expenses.approve") && data.pending.expenses > 0 && { n: data.pending.expenses, label: `expense${data.pending.expenses > 1 ? "s" : ""} waiting for your approval`, href: "/expenses?tab=approval" },
-  ].filter(Boolean) as { n: number; label: string; href: string }[] : [];
+  const chips: { key: PeriodKey; label: string; short: string }[] = [
+    { key: "month", label: "This month so far", short: "This month" },
+    { key: "last_month", label: lastMonthName, short: lastMonthName.slice(0, 3) },
+    { key: "year", label: "This year", short: "This year" },
+  ];
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold">{hello}, {me?.full_name.split(" ")[0]}</h1>
-        <p className="mt-1 text-base text-muted">Choose what you want to do, or look at today&apos;s summary further down.</p>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold sm:text-3xl">{hello}, {me?.full_name.split(" ")[0]}</h1>
+          <p className="mt-1 text-lg text-muted">Here is how the business is doing.</p>
+        </div>
+        <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto" role="tablist" aria-label="Which period">
+          {chips.map((c) => (
+            <button key={c.key} role="tab" aria-selected={period === c.key} onClick={() => choose(c.key)}
+              className={cx("min-h-12 rounded-full border-2 px-2 text-base font-semibold transition-colors sm:px-5",
+                period === c.key ? "border-sidebar bg-sidebar text-white" : "border-soft bg-white text-ink hover:border-accent")}>
+              <span className="sm:hidden">{c.short}</span><span className="hidden sm:inline">{c.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
-      {approvals.length > 0 && (
-        <div className="mb-6 space-y-2 rounded-xl border-2 border-warn/25 bg-warn-bg p-4">
-          <div className="flex items-center gap-2 text-lg font-semibold text-warn"><AlertCircle className="h-6 w-6" /> Needs your attention</div>
-          <div className="flex flex-wrap gap-2.5">
-            {approvals.map((a) => (
-              <Link key={a.href} href={a.href} className="inline-flex min-h-11 items-center gap-2 rounded-lg border-2 border-warn/30 bg-white px-4 text-base font-medium text-warn hover:bg-warn-bg">
-                <span className="rounded-full bg-warn px-2 text-sm text-white">{a.n}</span>{a.label} →
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+      {error ? (
+        error.includes("No data from Tally")
+          ? <Card><Empty title="Waiting for the first figures from Tally">The administrator needs to set up the Tally connector on the office computer (Settings → Tally link). Figures appear here automatically after that.</Empty></Card>
+          : <ErrorBox message={error} onRetry={reload} />
+      ) : !data ? <Spinner label="Getting the latest figures…" /> : (
+        <div className={cx("space-y-6 transition-opacity", loading && "opacity-60")}>
+          <Freshness f={data.freshness} onRefresh={reload} loading={loading} />
 
-      {actions.length > 0 && (
-        <section className="mb-8" aria-labelledby="todo">
-          <h2 id="todo" className="mb-3 text-xl font-semibold">What would you like to do?</h2>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {actions.map((a) => <ActionTile key={a.href} {...a} />)}
-          </div>
-        </section>
-      )}
+          <Card title={<span>In short — {data.period.label}</span>}>
+            <ul className="-my-1 divide-y divide-line">
+              {data.story.map((s, i) => <StoryLine key={i} tone={s.tone} text={s.text} onClick={() => setOpen(s.kind)} />)}
+            </ul>
+          </Card>
 
-      <h2 className="mb-3 text-xl font-semibold">Money at a glance</h2>
-      {loading && !data ? <Spinner /> : error ? <ErrorBox message={error} onRetry={reload} /> : data && (() => {
-        const k = data.kpis;
-        const trend = data.trend.map((t) => ({ month: t.month, sales: t.future ? null : num(t.sales), costs: t.future ? null : num(t.purchases) + num(t.expenses) }));
-        return (
-          <>
-            <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-5 xl:grid-cols-3">
-              <Kpi label="Sales this month" value={k.sales_month} href="/sales" sub={<Compare now={k.sales_month} prev={k.sales_prev_month} />}
-                foot={<>This year so far: <span className="num font-semibold text-ink">{rupees(k.sales_fy)}</span><br /><span className="text-sm">(before GST)</span></>} />
-              <Kpi label="Expenses this month" value={k.expenses_month} href="/expenses" sub={<>Supplier purchases: <span className="num">{rupees(k.purchases_month)}</span></>}
-                foot={<>This year so far: <span className="num font-semibold text-ink">{rupees(k.expenses_fy)}</span></>} />
-              <Kpi label="Dealers owe us" value={k.receivables} href="/outstanding" sub="Money still to come in"
-                foot={<span className={num(k.receivables_overdue) > 0 ? "font-medium text-bad" : ""}>Already late: <span className="num">{rupees(k.receivables_overdue)}</span></span>} />
-              <Kpi label="We owe suppliers" value={k.payables} href="/outstanding?tab=payable" sub="Money still to pay"
-                foot={<span className={num(k.payables_overdue) > 0 ? "font-medium text-bad" : ""}>Already late: <span className="num">{rupees(k.payables_overdue)}</span></span>} />
-              <Kpi label="Cash and bank now" value={k.cash_bank} href="/reports?r=bank-book" sub={`In ${data.banks.length} accounts`}
-                foot={<>Cash in hand: <span className="num font-semibold text-ink">{rupees(k.cash_only)}</span></>} />
+          <section aria-label="Main figures">
+            <p className="mb-3 text-base text-muted">Arrows compare with {data.period.compare_label}. Green is good news, red needs a look. Tap any box for details.</p>
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
+              {TILE_INFO.map((info) => (
+                <KpiTile key={info.key} info={info} t={data.tiles[info.key]} vs={data.period.compare_label.replace(/ \(.*\)$/, "")}
+                  months={data.month_labels} onOpen={() => setOpen(info.key)} />
+              ))}
             </div>
+          </section>
 
-            <div className="mt-6 grid gap-6 xl:grid-cols-3">
-              <Card className="xl:col-span-2" title="Sales and spending, month by month (this year)">
-                <div className="mb-3 flex flex-wrap gap-5 text-base text-ink">
-                  <span className="flex items-center gap-2"><span className="h-3.5 w-3.5 rounded-sm" style={{ background: SALES }} />Green bars = Sales</span>
-                  <span className="flex items-center gap-2"><span className="h-1 w-5 rounded" style={{ background: COSTS }} />Orange line = Purchases + expenses</span>
-                </div>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={trend} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                      <CartesianGrid vertical={false} stroke="#e3e9e5" />
-                      <XAxis dataKey="month" tickLine={false} axisLine={{ stroke: "#dce4df" }} tick={{ fontSize: 14, fill: "#4f5d56" }} />
-                      <YAxis tickLine={false} axisLine={false} width={72} tick={{ fontSize: 14, fill: "#4f5d56" }} tickFormatter={(v) => inrShort(v)} />
-                      <Tooltip content={<TrendTooltip />} cursor={{ fill: "rgba(220,228,223,0.45)" }} />
-                      <Bar dataKey="sales" fill={SALES} maxBarSize={28} radius={[4, 4, 0, 0]} />
-                      <Line dataKey="costs" stroke={COSTS} strokeWidth={2.5} dot={{ r: 4.5, strokeWidth: 2, stroke: "#fff", fill: COSTS }} activeDot={{ r: 6 }} />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-                <p className="mt-2 text-sm text-muted">Point at a bar to see the exact amounts. &quot;L&quot; means lakh (1 L = ₹1,00,000).</p>
-              </Card>
+          <Card title="Sales, month by month">
+            <SalesChart c={data.sales_chart} partialMonth={partial} />
+          </Card>
 
-              <Card title="Cash and bank balances">
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card title="Dealers who owe us the most" actions={<button onClick={() => setOpen("receivables")} className="text-base font-medium text-accent-strong underline underline-offset-4">See all</button>}>
+              {data.owe_us.length ? (
                 <ul className="divide-y divide-line">
-                  {data.banks.map((b) => (
-                    <li key={b.id} className="flex items-center gap-3 py-3.5 first:pt-0">
-                      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-soft-2 text-accent-strong">
-                        {b.kind === "cash" ? <Wallet className="h-5 w-5" /> : <Landmark className="h-5 w-5" />}
+                  {data.owe_us.map((r) => (
+                    <li key={r.party} className="flex items-center gap-3 py-3">
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-base font-medium">{r.party}</span>
+                        {num(r.late) > 0
+                          ? <span className="text-sm font-medium text-bad">{money(r.late)} late · oldest {r.oldest_late_days} days</span>
+                          : <span className="text-sm text-ok">Not late</span>}
                       </span>
-                      <span className="min-w-0 flex-1 text-base">{b.name}</span>
-                      <span className={cx("num text-base font-semibold", num(b.balance) < 0 && "text-bad")}>{inr(b.balance)}</span>
+                      <span className="num text-lg font-semibold">{money(r.owed)}</span>
                     </li>
                   ))}
                 </ul>
-                <div className="mt-3 flex items-center justify-between border-t-2 border-soft pt-3 text-lg font-semibold">
-                  <span>Total</span><span className="num">{inr(k.cash_bank)}</span>
-                </div>
-              </Card>
-            </div>
-
-            <div className="mt-6 grid gap-6 xl:grid-cols-3">
-              <Card title="Money dealers owe us — how late?">
-                <AgeingBars rows={data.receivable_ageing} />
-                <Link href="/outstanding" className="mt-5 inline-block text-base font-medium text-accent-strong hover:underline">See dealer-wise list →</Link>
-              </Card>
-
-              <Card title="Dealers who are late paying" pad={false}>
-                {data.overdue_dealers.length ? (
-                  <ul className="divide-y divide-line">
-                    {data.overdue_dealers.map((p) => (
-                      <li key={p.party_id}>
-                        <Link href={`/outstanding/${p.party_id}`} className="flex items-center gap-3 px-5 py-3.5 hover:bg-soft-2">
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-base font-medium">{p.party_name}</span>
-                            <span className="text-sm text-bad">Oldest bill is {p.oldest_overdue_days} days late</span>
-                          </span>
-                          <span className="num text-base font-semibold">{rupees(p.net)}</span>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                ) : <div className="flex items-center gap-2 px-5 py-8 text-base text-ok"><CheckCircle2 className="h-5 w-5" />No dealer is late. </div>}
-              </Card>
-
-              <Card title="Supplier bills to pay this week" pad={false}>
-                {data.upcoming_payments.length ? (
-                  <ul className="divide-y divide-line">
-                    {data.upcoming_payments.map((b) => (
-                      <li key={b.id}>
-                        <Link href={`/purchases/${b.id}`} className="flex items-center gap-3 px-5 py-3.5 hover:bg-soft-2">
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-base font-medium">{b.party_name}</span>
-                            <span className="text-sm text-muted">Bill {b.supplier_bill_no} · pay by {d(b.due_date)}</span>
-                          </span>
-                          <span className="num text-base font-semibold">{rupees(b.balance)}</span>
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                ) : <div className="px-5 py-8 text-base text-muted">Nothing to pay in the next 7 days.</div>}
-              </Card>
-            </div>
-
-            <Card className="mt-6" title="Last entries made" pad={false}>
-              <ul className="divide-y divide-line">
-                {data.recent.map((r, i) => (
-                  <li key={i}>
-                    <Link href={(TYPE_HREF[r.type] ?? (() => "/"))(r.source_id)} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3 text-base hover:bg-soft-2">
-                      <span className="w-28 text-muted">{d(r.date)}</span>
-                      <span className="w-36 font-medium text-accent-strong"><ReceiptText className="mr-1 inline h-4 w-4" />{TYPE_LABEL[r.type] ?? r.type}{r.is_reversal ? " (undone)" : ""}</span>
-                      <span className="min-w-0 flex-1 truncate">{r.narration}</span>
-                      <span className="num font-semibold">{inr(r.amount)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+              ) : <p className="text-base text-ok">No dealer owes us anything.</p>}
             </Card>
-          </>
-        );
-      })()}
+
+            <Card title={`Best dealers — ${data.period.label}`} actions={<button onClick={() => setOpen("sales")} className="text-base font-medium text-accent-strong underline underline-offset-4">See all</button>}>
+              {data.top_dealers.length ? (() => {
+                const max = Math.max(...data.top_dealers.map((r) => num(r.amount)));
+                return <div className="divide-y divide-line">{data.top_dealers.map((r) => (
+                  <BarRow key={r.party} label={r.party} value={r.amount} max={max} right={<Change pct={r.change_pct} size="sm" />} />))}</div>;
+              })() : <p className="text-base text-muted">No sales in this period yet.</p>}
+            </Card>
+
+            <Card title="Where the money went" actions={<button onClick={() => setOpen("expenses")} className="text-base font-medium text-accent-strong underline underline-offset-4">See all</button>}>
+              {data.spending.length ? (() => {
+                const max = Math.max(...data.spending.map((r) => num(r.amount)));
+                return <div className="divide-y divide-line">
+                  {data.spending.map((r) => <BarRow key={r.name} label={r.name} value={r.amount} max={max} right={<Change pct={r.change_pct} goodWhenUp={false} size="sm" />} />)}
+                  {num(data.spending_other) > 0 && <div className="flex justify-between py-2.5 text-base text-muted"><span>Everything else</span><span className="num">{money(data.spending_other)}</span></div>}
+                </div>;
+              })() : <p className="text-base text-muted">No expenses in this period yet.</p>}
+            </Card>
+
+            {data.products.length > 0 && (
+              <Card title={`Best-selling products — ${data.period.label}`}>
+                {(() => {
+                  const max = Math.max(...data.products.map((r) => num(r.amount)));
+                  return <div className="divide-y divide-line">{data.products.map((r) => (
+                    <BarRow key={r.item} label={r.item} value={r.amount} max={max} sub={`${num(r.qty).toLocaleString("en-IN")} ${r.unit}`} />))}</div>;
+                })()}
+              </Card>
+            )}
+          </div>
+
+          <p className="pb-4 text-center text-sm text-muted">
+            Figures come straight from Tally ({data.freshness.company}). Amounts are before GST. Nothing on this screen changes Tally.
+          </p>
+        </div>
+      )}
+      <DetailSheet kind={open} period={period} onClose={() => setOpen(null)} />
     </>
   );
 }

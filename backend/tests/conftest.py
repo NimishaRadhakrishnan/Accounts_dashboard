@@ -3,6 +3,7 @@ import os
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg2://vbt:vbt_dev@localhost:5432/vbt_accounts_test")
 os.environ["UPLOAD_DIR"] = "/tmp/vbt-test-uploads"
+os.environ["ENABLE_MANUAL_ENTRY"] = "true"
 
 from datetime import date  # noqa: E402
 from decimal import Decimal  # noqa: E402

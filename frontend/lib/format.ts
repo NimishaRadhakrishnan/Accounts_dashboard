@@ -88,3 +88,23 @@ export function rupees(v: Money): string {
   const n = Math.round(num(v));
   return `${n < 0 ? "−" : ""}₹${inr0.format(Math.abs(n))}`;
 }
+
+/** For headline numbers: ₹26.80 lakh, ₹1.60 crore, ₹49,287 — how people in India say amounts. */
+export function money(v: Money): string {
+  const n = num(v);
+  const a = Math.abs(n);
+  const sign = n < 0 ? "−" : "";
+  if (a >= 1e7) return `${sign}₹${(a / 1e7).toFixed(2)} crore`;
+  if (a >= 1e5) return `${sign}₹${(a / 1e5).toFixed(2)} lakh`;
+  return `${sign}₹${inr0.format(Math.round(a))}`;
+}
+
+export function ago(minutes: number | null | undefined): string {
+  if (minutes === null || minutes === undefined) return "not yet";
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const h = Math.floor(minutes / 60);
+  if (h < 24) return `${h} hour${h === 1 ? "" : "s"} ago`;
+  const days = Math.floor(h / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}

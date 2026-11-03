@@ -1,0 +1,59 @@
+VISHAKAN BIO TECH - TALLY CONNECTOR - SETUP GUIDE
+=================================================
+
+What it does
+  Every 10 minutes it asks Tally for new or changed entries and sends them to the manager's
+  dashboard. It ONLY READS from Tally. It never adds, changes or deletes anything in Tally.
+
+Do this once, on the computer where Tally runs
+-----------------------------------------------
+1. Tally settings
+   Open Tally > press F1 (Help) > Settings > Connectivity
+   - TallyPrime acts as : Both
+   - Port               : 9000
+   Close and open Tally again. Keep the company open.
+   (Tally.ERP 9: F12 Configure > Advanced Configuration > Tally.ERP 9 is acting as: Both, Port 9000)
+
+2. Install Python (free)
+   Go to https://www.python.org/downloads/ > Download > run the installer.
+   IMPORTANT: tick "Add python.exe to PATH" on the first screen.
+
+3. Put this folder at  C:\VishakanConnector
+
+4. Connector key
+   On the dashboard website: Settings > Tally link > Create connector key > Copy key.
+   Open connector.ini in Notepad:
+     - under [dashboard] set   url   = the dashboard address (for example https://accounts.yourcompany.in)
+     - paste the key after    token =
+   Save.
+
+5. Double-click  1-test-connection.bat
+   You must see two lines with a tick. If not, read the message - it says what to fix.
+
+6. Double-click  2-install-auto-update.bat
+   (If Windows says "Access denied", right-click it and choose "Run as administrator".)
+   The first full copy is sent straight away. After that, every 10 minutes.
+
+Everyday
+--------
+- Nothing to do. Keep Tally open with the company loaded while the computer is on.
+- The dashboard shows "Updated from Tally X minutes ago". If it says the Tally computer may be off,
+  check that the computer and Tally are open.
+
+If something goes wrong
+-----------------------
+- The file connector.log in this folder lists every run and any problem.
+- Run 1-test-connection.bat again; it explains what is wrong.
+- To stop automatic updates: double-click 3-stop-auto-update.bat
+
+Safety
+------
+- The connector talks to Tally only on this computer (localhost). In Windows Firewall, do NOT allow
+  port 9000 from other computers unless your IT person wants that.
+- The key in connector.ini lets this computer send figures. If the computer is replaced or lost,
+  turn the key off in Settings > Tally link and create a new one.
+
+Already have exported files instead?
+------------------------------------
+  py -3 vbt_tally_connector.py --file DayBook.xml Masters.xml
+sends Tally XML exports (Alt+E > XML) without the live connection - useful for a first trial.

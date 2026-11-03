@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     upload_dir: str = "./data/uploads"
     max_upload_mb: int = 5
 
+    # Data now comes from Tally. Manual entry (invoices, bills…) is switched off unless explicitly enabled.
+    enable_manual_entry: bool = False
+    # Folder holding the Tally connector files offered for download (Settings > Tally link)
+    connector_dir: str = ""
+
     # Company defaults (overridden by Settings screen once company data arrives)
     company_state_code: str = "33"  # Tamil Nadu
 
